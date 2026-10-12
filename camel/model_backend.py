@@ -30,11 +30,55 @@ except ImportError:
 
 import os
 
-OPENAI_API_KEY = os.environ['OPENAI_API_KEY']
-if 'BASE_URL' in os.environ:
-    BASE_URL = os.environ['BASE_URL']
-else:
-    BASE_URL = None
+# DeepSeek caps the `max_tokens` (completion) request parameter at 8192.
+DEEPSEEK_MAX_OUTPUT_TOKENS = 8192
+
+# Context-window fallback for model ids that are not in num_max_token_map
+# (overridable via the LLM_CONTEXT_TOKENS environment variable).
+DEFAULT_CONTEXT_TOKENS = 16384
+
+
+def _resolve_model_id(model_type: ModelType) -> str:
+    """The model string sent to the API: LLM_MODEL_ID env overrides the enum value.
+
+    This decouples the fixed ModelType enum from the actual model id, so any
+    model on an OpenAI-compatible endpoint (DeepSeek, Anthropic compat, ...)
+    can be selected at run time without code changes."""
+    return os.environ.get("LLM_MODEL_ID") or model_type.value
+
+
+def _context_limit(num_max_token_map: Dict[str, int], model_id: str) -> int:
+    limit = num_max_token_map.get(model_id)
+    if limit is None:
+        limit = int(os.environ.get("LLM_CONTEXT_TOKENS", DEFAULT_CONTEXT_TOKENS))
+    return limit
+
+
+def _cap_completion_tokens(model_id: str, num_max_completion_tokens: int) -> int:
+    cap = os.environ.get("LLM_MAX_COMPLETION_TOKENS")
+    if cap:
+        num_max_completion_tokens = min(num_max_completion_tokens, int(cap))
+    if model_id.startswith("deepseek"):
+        # DeepSeek rejects max_tokens above its 8192 completion cap.
+        num_max_completion_tokens = min(num_max_completion_tokens, DEEPSEEK_MAX_OUTPUT_TOKENS)
+    return max(num_max_completion_tokens, 1)
+
+
+def _resolve_endpoint():
+    """Resolve (api_key, base_url) for the active backend from the environment, lazily.
+
+    Credentials are read at call time (not import time) so this module can be imported
+    before they are configured. For `--provider deepseek`, run.py sets OPENAI_API_KEY to
+    the DeepSeek key and BASE_URL to https://api.deepseek.com, so the OpenAI-compatible
+    client transparently serves both providers. Fails loudly if no key is present
+    (no silent fallback)."""
+    api_key = os.environ.get("OPENAI_API_KEY")
+    base_url = os.environ.get("BASE_URL") or None
+    if not api_key:
+        raise RuntimeError(
+            "No API key found. Set OPENAI_API_KEY (--provider openai) or DEEPSEEK_API_KEY "
+            "(--provider deepseek) before running.")
+    return api_key, base_url
 
 
 class ModelBackend(ABC):
@@ -65,22 +109,22 @@ class OpenAIModel(ModelBackend):
 
     def run(self, *args, **kwargs):
         string = "\n".join([message["content"] for message in kwargs["messages"]])
-        encoding = tiktoken.encoding_for_model(self.model_type.value)
+        try:
+            encoding = tiktoken.encoding_for_model(self.model_type.value_for_tiktoken)
+        except KeyError:
+            # Non-OpenAI models (e.g. deepseek-chat) are unknown to tiktoken; fall back to
+            # the cl100k_base encoding for an approximate prompt-token count.
+            encoding = tiktoken.get_encoding("cl100k_base")
         num_prompt_tokens = len(encoding.encode(string))
         gap_between_send_receive = 15 * len(kwargs["messages"])
         num_prompt_tokens += gap_between_send_receive
 
         if openai_new_api:
-            # Experimental, add base_url
-            if BASE_URL:
-                client = openai.OpenAI(
-                    api_key=OPENAI_API_KEY,
-                    base_url=BASE_URL,
-                )
+            api_key, base_url = _resolve_endpoint()
+            if base_url:
+                client = openai.OpenAI(api_key=api_key, base_url=base_url)
             else:
-                client = openai.OpenAI(
-                    api_key=OPENAI_API_KEY
-                )
+                client = openai.OpenAI(api_key=api_key)
 
             num_max_token_map = {
                 "gpt-3.5-turbo": 4096,
@@ -92,29 +136,29 @@ class OpenAIModel(ModelBackend):
                 "gpt-4-32k": 32768,
                 "gpt-4-turbo": 8192,
                 "gpt-4o-mini": 16384,
+                "deepseek-chat": 65536,  # 64K context window
             }
-            num_max_token = num_max_token_map[self.model_type.value]
-            
+            model_id = _resolve_model_id(self.model_type)
+            num_max_token = _context_limit(num_max_token_map, model_id)
+
             print(f"String length: {len(string)}")
             print(f"num_prompt_tokens (before adjustment): {num_prompt_tokens}")
             print(f"gap_between_send_receive: {gap_between_send_receive}")
 
             num_max_completion_tokens = num_max_token - num_prompt_tokens
-            
+
             print(f"num_max_token: {num_max_token}")
             print(f"num_max_completion_tokens (before adjustment): {num_max_completion_tokens}")
-            if num_max_completion_tokens < 1:
-                num_max_completion_tokens = 1
-            
+            num_max_completion_tokens = _cap_completion_tokens(model_id, num_max_completion_tokens)
             print(f"num_max_completion_tokens (after adjustment): {num_max_completion_tokens}")
 
             self.model_config_dict['max_tokens'] = num_max_completion_tokens
 
-            response = client.chat.completions.create(*args, **kwargs, model=self.model_type.value,
+            response = client.chat.completions.create(*args, **kwargs, model=model_id,
                                                       **self.model_config_dict)
 
             cost = prompt_cost(
-                self.model_type.value,
+                model_id,
                 num_prompt_tokens=response.usage.prompt_tokens,
                 num_completion_tokens=response.usage.completion_tokens
             )
@@ -137,16 +181,19 @@ class OpenAIModel(ModelBackend):
                 "gpt-4-32k": 32768,
                 "gpt-4-turbo": 16384,
                 "gpt-4o-mini": 16384,
+                "deepseek-chat": 65536,
             }
-            num_max_token = num_max_token_map[self.model_type.value]
-            num_max_completion_tokens = num_max_token - num_prompt_tokens
+            model_id = _resolve_model_id(self.model_type)
+            num_max_token = _context_limit(num_max_token_map, model_id)
+            num_max_completion_tokens = _cap_completion_tokens(
+                model_id, num_max_token - num_prompt_tokens)
             self.model_config_dict['max_tokens'] = num_max_completion_tokens
 
-            response = openai.ChatCompletion.create(*args, **kwargs, model=self.model_type.value,
+            response = openai.ChatCompletion.create(*args, **kwargs, model=model_id,
                                                     **self.model_config_dict)
 
             cost = prompt_cost(
-                self.model_type.value,
+                model_id,
                 num_prompt_tokens=response["usage"]["prompt_tokens"],
                 num_completion_tokens=response["usage"]["completion_tokens"]
             )
@@ -199,6 +246,8 @@ class ModelFactory:
             ModelType.GPT_4_TURBO_V,
             ModelType.GPT_4_O_MINI,
             ModelType.GPT_4_O_MINI_NEW,
+            ModelType.DEEPSEEK_CHAT,
+            ModelType.CUSTOM,
             None
         }:
             model_class = OpenAIModel

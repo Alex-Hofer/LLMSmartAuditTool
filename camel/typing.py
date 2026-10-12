@@ -52,11 +52,22 @@ class ModelType(Enum):
     GPT_4_TURBO_V = "gpt-4-turbo"
     GPT_4_O_MINI = "gpt-4o-mini"
     GPT_4_O_MINI_NEW = "gpt-4o-mini"
+    # DeepSeek (OpenAI-API compatible). Use deepseek-chat, NOT deepseek-reasoner:
+    # the reasoner model ignores temperature/top_p, which this pipeline relies on.
+    DEEPSEEK_CHAT = "deepseek-chat"
+    # Carrier for arbitrary model ids on any OpenAI-compatible endpoint.
+    # The actual model string sent to the API comes from the LLM_MODEL_ID
+    # environment variable (see camel/model_backend.py and run.py).
+    CUSTOM = "custom"
     STUB = "stub"
 
     @property
     def value_for_tiktoken(self):
-        return self.value if self.name != "STUB" else "gpt-3.5-turbo-0125"
+        # tiktoken only knows OpenAI models; map non-OpenAI models to a known encoding
+        # so token estimation does not raise. STUB keeps its historical mapping.
+        if self.name in ("STUB", "DEEPSEEK_CHAT", "CUSTOM"):
+            return "gpt-3.5-turbo-0125"
+        return self.value
 
 
 class PhaseType(Enum):

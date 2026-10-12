@@ -69,6 +69,20 @@ Different from direct response from LLM, such as few-shots and Chain-of-Thought 
 - 🆕 **New Release!** New version of OPENAI API, and new models available for use.
 
 
+## This fork: SmartBugs integration, DeepSeek and other backends
+
+This branch adapts the tool for use as a [SmartBugs](https://github.com/smartbugs/smartbugs) tool:
+
+* **Provider and model are selected at run time.** `python run.py --provider deepseek|openai|custom --model <id> ...`,
+  or through the environment: `LLM_PROVIDER`, `LLM_MODEL`, `LLM_BASE_URL` (for `custom`: any OpenAI-compatible
+  endpoint), `LLM_CONTEXT_TOKENS`, `LLM_MAX_COMPLETION_TOKENS`. The key comes from `DEEPSEEK_API_KEY` or
+  `OPENAI_API_KEY`; nothing is baked into the image.
+* **Every detector's result is kept.** `chatdev/audit_report.py` collects the findings of all 41 detector phases
+  into one report; upstream, only the result of the last phase survives a run.
+* **Headless image.** `Dockerfile.smartbugs` builds the image SmartBugs uses:
+  `docker build -f Dockerfile.smartbugs -t smartbugs/llmsmartaudit:c507fe4 .`
+* The upstream `evaluation/` data (3.7 GB) is not part of this branch.
+
 ## ⚡️ Getting Started
 
 ### 🖥️ Terminal Usage

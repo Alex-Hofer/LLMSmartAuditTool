@@ -8,6 +8,7 @@ from camel.typing import TaskType, ModelType
 from chatdev.chat_env import ChatEnv
 from chatdev.statistics import get_info
 from chatdev.utils import log_visualize, log_arguments
+from chatdev import audit_report
 
 
 class Phase(ABC):
@@ -399,6 +400,9 @@ class Phase(ABC):
                           placeholders=self.phase_env,
                           memory=chat_env.memory,
                           model_type=self.model_type)
+        # Capture per-detector / summary conclusions for the standardized Markdown report.
+        # Non-detector phases are ignored inside record(), so this is safe for all phases.
+        audit_report.record(self.phase_name, self.seminar_conclusion)
         chat_env = self.update_chat_env(chat_env)
         return chat_env
 
@@ -680,7 +684,8 @@ class TestErrorSummary(Phase):
                               user_role_prompt=self.user_role_prompt,
                               memory=chat_env.memory,
                               chat_turn_limit=chat_turn_limit,
-                              placeholders=self.phase_env)
+                              placeholders=self.phase_env,
+                              model_type=self.model_type)
         chat_env = self.update_chat_env(chat_env)
         return chat_env
 
@@ -826,7 +831,8 @@ class TestBugsSummary(Phase):
                               assistant_role_prompt=self.assistant_role_prompt,
                               user_role_prompt=self.user_role_prompt,
                               chat_turn_limit=chat_turn_limit,
-                              placeholders=self.phase_env)
+                              placeholders=self.phase_env,
+                              model_type=self.model_type)
         chat_env = self.update_chat_env(chat_env)
         return chat_env
     

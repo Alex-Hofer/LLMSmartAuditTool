@@ -1,0 +1,11 @@
+# Build context of Dockerfile.smartbugs (own file of the SmartBugs integration).
+# Keeps the upstream evaluation data (3.7 GB, not needed at run time), run
+# artefacts and local environments out of the image; no .env is ever copied.
+.env
+.venv/
+.git/
+.gitmodules
+evaluation/
+WareHouse/
+**/__pycache__/
+*.pyc

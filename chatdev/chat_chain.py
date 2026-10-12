@@ -11,6 +11,7 @@ from camel.configs import ChatGPTConfig
 from camel.typing import TaskType, ModelType
 from chatdev.chat_env import ChatEnv, ChatEnvConfig
 from chatdev.statistics import get_info
+from chatdev import audit_report
 from camel.web_spider import modal_trans
 from chatdev.utils import log_visualize, now
 
@@ -206,6 +207,9 @@ class ChatChain:
         software_path = os.path.join(directory, "_".join([self.project_name, self.org_name, self.start_time]))
         self.chat_env.set_directory(software_path)
 
+        # start each analysis run with an empty audit-report collector
+        audit_report.reset()
+
         if self.chat_env.config.with_memory is True:
             self.chat_env.init_memory()
 
@@ -312,6 +316,43 @@ class ChatChain:
                 if os.path.isdir(file_path) and file_path.endswith("__pycache__"):
                     shutil.rmtree(file_path, ignore_errors=True)
                     post_info += "{} Removed.".format(file_path) + "\n\n"
+
+        # write the standardized Markdown audit report for this run.
+        # Done BEFORE log_visualize(post_info) so the report is produced even if console
+        # printing later fails (e.g. Windows cp1252 cannot encode the emoji in post_info).
+        try:
+            # Prefer the runtime configuration set by run.py: LLM_PROVIDER names the
+            # selected provider, LLM_MODEL_ID the literal model id (may differ from
+            # the ModelType enum, e.g. deepseek-reasoner or a custom endpoint model).
+            provider = os.environ.get("LLM_PROVIDER") or (
+                "deepseek" if self.model_type == ModelType.DEEPSEEK_CHAT else "openai")
+            model_label = os.environ.get("LLM_MODEL_ID") or self.model_type.value
+            report_path = os.path.join(
+                self.chat_env.env_dict['directory'],
+                "{}_audit_report.md".format(self.project_name))
+            config_name = os.path.basename(os.path.dirname(self.config_path))
+            audit_report.write_markdown(
+                out_path=report_path,
+                contract_name=self.project_name,
+                provider=provider,
+                model=model_label,
+                timestamp=self.start_time,
+                config=config_name)
+            json_path = os.path.join(
+                self.chat_env.env_dict['directory'],
+                "{}_audit_report.json".format(self.project_name))
+            audit_report.write_json(
+                out_path=json_path,
+                contract_name=self.project_name,
+                provider=provider,
+                model=model_label,
+                timestamp=self.start_time,
+                config=config_name)
+            log_visualize("**[Audit Report]** written to {}".format(report_path))
+            print("Audit report written to:", report_path)
+            print("Audit report JSON written to:", json_path)
+        except Exception as e:
+            print("WARNING: could not write audit report:", e)
 
         log_visualize(post_info)
 

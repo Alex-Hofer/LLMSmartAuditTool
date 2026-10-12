@@ -13,6 +13,7 @@ def prompt_cost(model_type: str, num_prompt_tokens: float, num_completion_tokens
         "gpt-4-0613": 0.03,
         "gpt-4-32k": 0.06,
         "gpt-4-turbo": 0.01,
+        "deepseek-chat": 0.00027,  # DeepSeek published price ($0.27 / 1M input tokens, cache-miss); approximate
     }
 
     output_cost_map = {
@@ -24,6 +25,7 @@ def prompt_cost(model_type: str, num_prompt_tokens: float, num_completion_tokens
         "gpt-4-0613": 0.06,
         "gpt-4-32k": 0.12,
         "gpt-4-turbo": 0.03,
+        "deepseek-chat": 0.0011,  # DeepSeek published price ($1.10 / 1M output tokens); approximate
     }
 
     if model_type not in input_cost_map or model_type not in output_cost_map:

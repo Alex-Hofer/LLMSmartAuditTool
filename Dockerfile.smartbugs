@@ -1,0 +1,37 @@
+# Headless image of LLMSmartAudit for use as a SmartBugs tool.
+# Build (from the root of this repository). The tag must be the one that
+# tools/llmsmartaudit/config.yaml in SmartBugs names as "image:", otherwise
+# SmartBugs tries to pull it from a registry:
+#   docker build -f Dockerfile.smartbugs -t smartbugs/llmsmartaudit:c507fe4 .
+# If paths in the working tree exceed MAX_PATH on Windows, build from git
+# instead of the working tree:
+#   git archive HEAD | docker build -f Dockerfile.smartbugs -t smartbugs/llmsmartaudit:c507fe4 -
+#
+# The tool reasons over Solidity SOURCE via an LLM, so NO solc / compiler is needed.
+# No API key is baked in: provide DEEPSEEK_API_KEY or OPENAI_API_KEY at run time
+# (SmartBugs forwards them via sb/docker.py).
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# Copy the tool source into the image.
+COPY . /app
+
+# Python deps only. requirements.txt pins httpx<0.28 (openai 1.3.3 compat).
+RUN pip install --no-cache-dir -r requirements.txt
+
+# pre_processing lists WareHouse/ at startup; ensure it exists (its contents are .dockerignored).
+RUN mkdir -p /app/WareHouse
+
+# Provider can be overridden per run via env (read by the SmartBugs wrapper).
+ENV LLM_PROVIDER=deepseek
+# LLM_MODEL is deliberately NOT baked in. The former default deepseek-chat
+# has been retired by the provider, and a baked value let a host that forgot
+# the variable run for hours against HTTP 400. The
+# SmartBugs entrypoint (tools/llmsmartaudit/scripts/do_solidity.sh) now refuses
+# to start without LLM_MODEL, so the mistake surfaces in seconds, as an error.
+# Avoid UnicodeEncodeError when the tool prints emoji in its post-processing summary.
+ENV PYTHONIOENCODING=utf-8
+
+# SmartBugs overrides the entrypoint via the tool config; this is only a sane default.
+ENTRYPOINT ["/bin/sh"]
